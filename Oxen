@@ -1,0 +1,674 @@
+# -*- coding: utf-8 -*-
+from flask import Flask, request, jsonify, render_template_string
+import json
+import os
+import hashlib
+import uuid
+from datetime import datetime, timedelta
+from threading import Thread
+import time
+
+app = Flask(__name__)
+
+# Configuración
+DB_PATH = os.path.join(os.path.dirname(__file__), 'database')
+os.makedirs(DB_PATH, exist_ok=True)
+
+LICENSES_DB = os.path.join(DB_PATH, 'licenses.json')
+USERS_DB = os.path.join(DB_PATH, 'users.json')
+
+# HTML para panel web
+ADMIN_PANEL_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Oxen v3 - Admin Panel</title>
+    <style>
+        :root {
+            --primary: #ff6b35;
+            --secondary: #ff8e53;
+            --dark: #0f0f23;
+            --darker: #1a1a2e;
+            --success: #00ff00;
+            --danger: #ff4444;
+        }
+        
+        body { 
+            background: linear-gradient(135deg, var(--dark), var(--darker));
+            color: white; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { 
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            padding: 25px; 
+            border-radius: 15px;
+            text-align: center;
+            margin-bottom: 25px;
+            box-shadow: 0 10px 30px rgba(255, 107, 53, 0.3);
+        }
+        .card {
+            background: rgba(255,255,255,0.08);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 15px 0;
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.3s ease;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(255, 107, 53, 0.2);
+        }
+        .btn {
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 5px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .btn:hover { 
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 107, 53, 0.4);
+        }
+        .btn-danger {
+            background: linear-gradient(90deg, var(--danger), #cc0000);
+        }
+        .stats { 
+            display: grid; 
+            grid-template-columns: repeat(4, 1fr); 
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .stat-card { 
+            background: linear-gradient(135deg, rgba(255,107,53,0.3), rgba(255,142,83,0.2));
+            padding: 20px; 
+            border-radius: 12px; 
+            text-align: center;
+            border: 1px solid rgba(255,107,53,0.3);
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        th, td { 
+            padding: 15px; 
+            text-align: left; 
+            border-bottom: 1px solid rgba(255,255,255,0.1); 
+        }
+        th {
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            color: white;
+        }
+        tr:hover {
+            background: rgba(255,107,53,0.1);
+        }
+        input, select, textarea { 
+            background: rgba(255,255,255,0.1); 
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white; 
+            padding: 12px; 
+            border-radius: 8px;
+            margin: 8px;
+            width: 200px;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 10px rgba(255,107,53,0.3);
+        }
+        .license-key {
+            font-family: 'Courier New', monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+        .status-active { color: var(--success); font-weight: bold; }
+        .status-inactive { color: var(--danger); font-weight: bold; }
+        .tab-container {
+            display: flex;
+            margin-bottom: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            padding: 5px;
+        }
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 8px;
+            margin: 0 5px;
+            transition: all 0.3s ease;
+        }
+        .tab.active {
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🐂 Oxen v3 Ultimate - Control Panel</h1>
+            <p>Sistema de Gestión de Licencias y Optimización</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>📊 Total Licencias</h3>
+                <h2 id="total-licenses">0</h2>
+            </div>
+            <div class="stat-card">
+                <h3>🟢 Activas</h3>
+                <h2 id="active-licenses">0</h2>
+            </div>
+            <div class="stat-card">
+                <h3>🔴 Inactivas</h3>
+                <h2 id="inactive-licenses">0</h2>
+            </div>
+            <div class="stat-card">
+                <h3>💰 Ingresos</h3>
+                <h2 id="revenue">$0</h2>
+            </div>
+        </div>
+
+        <div class="tab-container">
+            <div class="tab active" onclick="switchTab('generate')">🎫 Generar Licencia</div>
+            <div class="tab" onclick="switchTab('manage')">⚡ Gestionar Licencias</div>
+            <div class="tab" onclick="switchTab('search')">🔍 Buscar</div>
+            <div class="tab" onclick="switchTab('analytics')">📈 Analytics</div>
+        </div>
+
+        <!-- Pestaña Generar Licencia -->
+        <div id="generate-tab" class="tab-content active">
+            <div class="card">
+                <h2>🎯 Generar Nueva Licencia Oxen v3</h2>
+                <div>
+                    <input type="text" id="customer-name" placeholder="Nombre del cliente" required>
+                    <input type="email" id="customer-email" placeholder="Email del cliente">
+                    <input type="number" id="days" placeholder="Días de duración" value="30" min="1" max="3650">
+                    <select id="license-type">
+                        <option value="BASIC">BASIC - $10</option>
+                        <option value="PREMIUM">PREMIUM - $25</option>
+                        <option value="ULTIMATE">ULTIMATE - $50</option>
+                        <option value="LIFETIME">LIFETIME - $150</option>
+                    </select>
+                    <textarea id="notes" placeholder="Notas adicionales" rows="3" style="width: 100%;"></textarea>
+                </div>
+                <button class="btn" onclick="generateLicense()">🚀 Generar Licencia Premium</button>
+                <div id="license-result" style="margin-top: 20px;"></div>
+            </div>
+        </div>
+
+        <!-- Pestaña Gestionar Licencias -->
+        <div id="manage-tab" class="tab-content">
+            <div class="card">
+                <h2>⚡ Gestión de Licencias Activas</h2>
+                <div id="licenses-list"></div>
+            </div>
+        </div>
+
+        <!-- Pestaña Buscar -->
+        <div id="search-tab" class="tab-content">
+            <div class="card">
+                <h2>🔍 Buscar en la Base de Datos</h2>
+                <input type="text" id="search-term" placeholder="Buscar por HWID, cliente, email, key..." style="width: 300px;">
+                <button class="btn" onclick="searchLicenses()">🔎 Buscar Avanzado</button>
+                <div id="search-results" style="margin-top: 20px;"></div>
+            </div>
+        </div>
+
+        <!-- Pestaña Analytics -->
+        <div id="analytics-tab" class="tab-content">
+            <div class="card">
+                <h2>📈 Analytics y Estadísticas</h2>
+                <div id="analytics-content">
+                    <div class="stats">
+                        <div class="stat-card">
+                            <h3>📅 Licencias Hoy</h3>
+                            <h2 id="today-licenses">0</h2>
+                        </div>
+                        <div class="stat-card">
+                            <h3>💰 Ingresos Hoy</h3>
+                            <h2 id="today-revenue">$0</h2>
+                        </div>
+                        <div class="stat-card">
+                            <h3>👥 Clientes Únicos</h3>
+                            <h2 id="unique-customers">0</h2>
+                        </div>
+                        <div class="stat-card">
+                            <h3>📈 Tasa Activación</h3>
+                            <h2 id="activation-rate">0%</h2>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTab = 'generate';
+        
+        function switchTab(tabName) {
+            // Ocultar todas las pestañas
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Mostrar pestaña seleccionada
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+            currentTab = tabName;
+            
+            if (tabName === 'manage') loadAllLicenses();
+            if (tabName === 'analytics') loadAnalytics();
+        }
+
+        function loadStats() {
+            fetch('/api/stats').then(r => r.json()).then(data => {
+                document.getElementById('total-licenses').textContent = data.total_licenses;
+                document.getElementById('active-licenses').textContent = data.active_licenses;
+                document.getElementById('inactive-licenses').textContent = data.inactive_licenses;
+                document.getElementById('revenue').textContent = '$' + data.total_revenue;
+            });
+        }
+
+        function generateLicense() {
+            const customer = document.getElementById('customer-name').value;
+            const email = document.getElementById('customer-email').value;
+            const days = document.getElementById('days').value;
+            const type = document.getElementById('license-type').value;
+            const notes = document.getElementById('notes').value;
+
+            if (!customer) {
+                alert('Por favor ingresa el nombre del cliente');
+                return;
+            }
+
+            fetch('/api/generate_license', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    customer_name: customer,
+                    customer_email: email,
+                    days: parseInt(days),
+                    type: type,
+                    notes: notes
+                })
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    document.getElementById('license-result').innerHTML = 
+                        `<div style="background:rgba(0,255,0,0.2);padding:20px;border-radius:10px;border:2px solid var(--success);">
+                            <h3>✅ Licencia Oxen v3 Generada Exitosamente</h3>
+                            <p><strong>🔑 Key:</strong> <span class="license-key">${data.key}</span></p>
+                            <p><strong>👤 Cliente:</strong> ${data.customer_name}</p>
+                            <p><strong>📧 Email:</strong> ${data.customer_email || 'No especificado'}</p>
+                            <p><strong>🎯 Tipo:</strong> ${data.type}</p>
+                            <p><strong>📅 Expira:</strong> ${data.expiry}</p>
+                            <p><strong>💰 Precio:</strong> $${data.price}</p>
+                            <button class="btn" onclick="copyToClipboard('${data.key}')">📋 Copiar Key</button>
+                        </div>`;
+                    // Limpiar formulario
+                    document.getElementById('customer-name').value = '';
+                    document.getElementById('customer-email').value = '';
+                    document.getElementById('notes').value = '';
+                    loadStats();
+                } else {
+                    document.getElementById('license-result').innerHTML = 
+                        `<div style="background:rgba(255,0,0,0.2);padding:15px;border-radius:10px;">
+                            <h3>❌ Error</h3>
+                            <p>${data.error}</p>
+                        </div>`;
+                }
+            });
+        }
+
+        function loadAllLicenses() {
+            fetch('/api/all_licenses').then(r => r.json()).then(data => {
+                let html = '<table><tr><th>Key</th><th>Cliente</th><th>Email</th><th>Tipo</th><th>HWID</th><th>Expira</th><th>Estado</th><th>Acciones</th></tr>';
+                data.licenses.forEach(license => {
+                    const statusClass = license.status === 'active' ? 'status-active' : 'status-inactive';
+                    const statusText = license.status === 'active' ? '🟢 Activa' : '🔴 Inactiva';
+                    
+                    html += `<tr>
+                        <td><span class="license-key">${license.key}</span></td>
+                        <td>${license.customer_name}</td>
+                        <td>${license.customer_email || 'N/A'}</td>
+                        <td>${license.type}</td>
+                        <td>${license.hardware_id || 'No asignado'}</td>
+                        <td>${license.expiry}</td>
+                        <td class="${statusClass}">${statusText}</td>
+                        <td>
+                            <button class="btn" onclick="toggleLicense('${license.key}')">
+                                ${license.status === 'active' ? '🔴 Desactivar' : '🟢 Activar'}
+                            </button>
+                            <button class="btn btn-danger" onclick="deleteLicense('${license.key}')">🗑️ Eliminar</button>
+                        </td>
+                    </tr>`;
+                });
+                html += '</table>';
+                document.getElementById('licenses-list').innerHTML = html;
+            });
+        }
+
+        function searchLicenses() {
+            const term = document.getElementById('search-term').value;
+            if (!term) {
+                alert('Por favor ingresa un término de búsqueda');
+                return;
+            }
+
+            fetch('/api/search_licenses?term=' + encodeURIComponent(term))
+                .then(r => r.json())
+                .then(data => {
+                    let html = '<h3>🔍 Resultados de la Búsqueda</h3>';
+                    if (data.licenses.length > 0) {
+                        html += '<table><tr><th>Key</th><th>Cliente</th><th>Email</th><th>HWID</th><th>Estado</th></tr>';
+                        data.licenses.forEach(license => {
+                            const statusText = license.status === 'active' ? '🟢 Activa' : '🔴 Inactiva';
+                            html += `<tr>
+                                <td>${license.key}</td>
+                                <td>${license.customer_name}</td>
+                                <td>${license.customer_email || 'N/A'}</td>
+                                <td>${license.hardware_id || 'No asignado'}</td>
+                                <td>${statusText}</td>
+                            </tr>`;
+                        });
+                        html += '</table>';
+                    } else {
+                        html += '<p>No se encontraron resultados para: "' + term + '"</p>';
+                    }
+                    document.getElementById('search-results').innerHTML = html;
+                });
+        }
+
+        function loadAnalytics() {
+            fetch('/api/analytics').then(r => r.json()).then(data => {
+                document.getElementById('today-licenses').textContent = data.today_licenses;
+                document.getElementById('today-revenue').textContent = '$' + data.today_revenue;
+                document.getElementById('unique-customers').textContent = data.unique_customers;
+                document.getElementById('activation-rate').textContent = data.activation_rate + '%';
+            });
+        }
+
+        function toggleLicense(key) {
+            fetch('/api/toggle_license', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key: key})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    loadAllLicenses();
+                    loadStats();
+                }
+            });
+        }
+
+        function deleteLicense(key) {
+            if (confirm('¿Estás seguro de que quieres eliminar permanentemente esta licencia?')) {
+                fetch('/api/delete_license', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({key: key})
+                }).then(r => r.json()).then(data => {
+                    if (data.success) {
+                        alert(data.message);
+                        loadAllLicenses();
+                        loadStats();
+                    }
+                });
+            }
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✅ Key copiada al portapapeles: ' + text);
+            });
+        }
+
+        // Cargar estadísticas al iniciar
+        loadStats();
+        setInterval(loadStats, 10000); // Actualizar cada 10 segundos
+    </script>
+</body>
+</html>
+"""
+
+def load_database():
+    """Cargar base de datos de licencias"""
+    if os.path.exists(LICENSES_DB):
+        with open(LICENSES_DB, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_database(data):
+    """Guardar base de datos"""
+    with open(LICENSES_DB, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def generate_license_key():
+    """Generar clave de licencia única"""
+    timestamp = str(datetime.now().timestamp())
+    random_component = str(uuid.uuid4())
+    unique_string = f"OXEN-V3-{timestamp}-{random_component}"
+    key_hash = hashlib.sha256(unique_string.encode()).hexdigest()
+    key_base = key_hash[:20].upper()
+    return f"OXEN-{key_base[:4]}-{key_base[4:8]}-{key_base[8:12]}-{key_base[12:16]}"
+
+def get_license_price(license_type):
+    """Obtener precio según tipo de licencia"""
+    prices = {
+        "BASIC": 10,
+        "PREMIUM": 25,
+        "ULTIMATE": 50,
+        "LIFETIME": 150
+    }
+    return prices.get(license_type, 25)
+
+@app.route('/')
+def admin_panel():
+    """Panel de administración"""
+    return render_template_string(ADMIN_PANEL_HTML)
+
+@app.route('/api/stats')
+def api_stats():
+    """API: Estadísticas del sistema"""
+    licenses = load_database()
+    total = len(licenses)
+    active = len([l for l in licenses.values() if l.get('status') == 'active'])
+    inactive = total - active
+    
+    # Calcular ingresos
+    total_revenue = sum(get_license_price(l.get('type', 'PREMIUM')) for l in licenses.values())
+    
+    return jsonify({
+        'total_licenses': total,
+        'active_licenses': active,
+        'inactive_licenses': inactive,
+        'total_revenue': total_revenue
+    })
+
+@app.route('/api/generate_license', methods=['POST'])
+def api_generate_license():
+    """API: Generar nueva licencia"""
+    data = request.json
+    licenses = load_database()
+    
+    key = generate_license_key()
+    created = datetime.now()
+    expiry = created + timedelta(days=data.get('days', 30))
+    price = get_license_price(data.get('type', 'PREMIUM'))
+    
+    license_data = {
+        'key': key,
+        'customer_name': data.get('customer_name'),
+        'customer_email': data.get('customer_email'),
+        'type': data.get('type', 'PREMIUM'),
+        'days': data.get('days', 30),
+        'price': price,
+        'created': created.strftime("%Y-%m-%d %H:%M:%S"),
+        'expiry': expiry.strftime("%Y-%m-%d"),
+        'status': 'active',
+        'hardware_id': None,
+        'activated_date': None,
+        'notes': data.get('notes', '')
+    }
+    
+    licenses[key] = license_data
+    save_database(licenses)
+    
+    return jsonify({
+        'success': True,
+        'key': key,
+        'customer_name': license_data['customer_name'],
+        'customer_email': license_data['customer_email'],
+        'type': license_data['type'],
+        'expiry': license_data['expiry'],
+        'price': price
+    })
+
+@app.route('/api/all_licenses')
+def api_all_licenses():
+    """API: Obtener todas las licencias"""
+    licenses = load_database()
+    return jsonify({
+        'licenses': list(licenses.values())
+    })
+
+@app.route('/api/search_licenses')
+def api_search_licenses():
+    """API: Buscar licencias"""
+    term = request.args.get('term', '').lower()
+    licenses = load_database()
+    
+    results = []
+    for license_data in licenses.values():
+        if (term in license_data.get('key', '').lower() or
+            term in license_data.get('customer_name', '').lower() or
+            term in license_data.get('customer_email', '').lower() or
+            term in str(license_data.get('hardware_id', '')).lower()):
+            results.append(license_data)
+    
+    return jsonify({
+        'licenses': results
+    })
+
+@app.route('/api/toggle_license', methods=['POST'])
+def api_toggle_license():
+    """API: Activar/desactivar licencia"""
+    data = request.json
+    licenses = load_database()
+    
+    key = data.get('key')
+    if key in licenses:
+        current_status = licenses[key].get('status', 'active')
+        licenses[key]['status'] = 'inactive' if current_status == 'active' else 'active'
+        save_database(licenses)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Licencia {"activada" if licenses[key]["status"] == "active" else "desactivada"}'
+        })
+    
+    return jsonify({'success': False, 'message': 'Licencia no encontrada'})
+
+@app.route('/api/delete_license', methods=['POST'])
+def api_delete_license():
+    """API: Eliminar licencia"""
+    data = request.json
+    licenses = load_database()
+    
+    key = data.get('key')
+    if key in licenses:
+        del licenses[key]
+        save_database(licenses)
+        return jsonify({'success': True, 'message': 'Licencia eliminada'})
+    
+    return jsonify({'success': False, 'message': 'Licencia no encontrada'})
+
+@app.route('/api/analytics')
+def api_analytics():
+    """API: Analytics del sistema"""
+    licenses = load_database()
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    today_licenses = len([l for l in licenses.values() if l.get('created', '').startswith(today)])
+    today_revenue = sum(get_license_price(l.get('type')) for l in licenses.values() if l.get('created', '').startswith(today))
+    
+    unique_customers = len(set(l.get('customer_email') for l in licenses.values() if l.get('customer_email')))
+    
+    total_licenses = len(licenses)
+    activated_licenses = len([l for l in licenses.values() if l.get('hardware_id')])
+    activation_rate = (activated_licenses / total_licenses * 100) if total_licenses > 0 else 0
+    
+    return jsonify({
+        'today_licenses': today_licenses,
+        'today_revenue': today_revenue,
+        'unique_customers': unique_customers,
+        'activation_rate': round(activation_rate, 1)
+    })
+
+@app.route('/api/validate_license', methods=['POST'])
+def api_validate_license():
+    """API: Validar licencia (para cliente)"""
+    data = request.json
+    licenses = load_database()
+    
+    key = data.get('key')
+    hardware_id = data.get('hardware_id')
+    
+    if key in licenses:
+        license_data = licenses[key]
+        
+        # Verificar estado
+        if license_data.get('status') != 'active':
+            return jsonify({'valid': False, 'message': 'Licencia desactivada'})
+        
+        # Verificar expiración
+        expiry_str = license_data.get('expiry')
+        if expiry_str:
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d")
+            if datetime.now() > expiry_date:
+                return jsonify({'valid': False, 'message': 'Licencia expirada'})
+        
+        # Si es la primera activación, registrar HWID
+        if not license_data.get('hardware_id'):
+            license_data['hardware_id'] = hardware_id
+            license_data['activated_date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_database(licenses)
+        # Si ya está activada, verificar que coincida el HWID
+        elif license_data.get('hardware_id') != hardware_id:
+            return jsonify({'valid': False, 'message': 'Licencia ya usada en otro equipo'})
+        
+        return jsonify({
+            'valid': True,
+            'message': 'Licencia válida',
+            'type': license_data.get('type', 'PREMIUM'),
+            'expiry': expiry_str
+        })
+    
+    return jsonify({'valid': False, 'message': 'Licencia no encontrada'})
+
+if __name__ == '__main__':
+    print("🚀 Iniciando Oxen v3 Server...")
+    print("🌐 Admin Panel: http://localhost:5000")
+    print("🔧 API Running on: http://localhost:5000/api")
+    app.run(host='0.0.0.0', port=5000, debug=True)
